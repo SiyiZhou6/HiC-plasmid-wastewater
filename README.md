@@ -1,2 +1,342 @@
-# HiC-plasmid-wastewater
-Code for: Mapping plasmid-host networks and tracking persistent plasmids in wastewater microbiomes
+Plasmid Persistence and ARG Assignment Pipeline
+================================================
+
+Custom analysis scripts for:
+Zhou et al., "Mapping plasmid-host networks and tracking persistent
+plasmids in wastewater microbiomes"
+
+Overview
+--------
+This pipeline consists of five modules:
+
+  01_plasmid_clustering.R          - Cluster plasmid contigs via
+                                     Walktrap on Hi-C contact graph
+  02_persistence_identification.py - Identify persistent plasmid
+                                     clusters across treatment stages
+  03_mobility_host_annotation.py   - Annotate persistent clusters with
+                                     mobility and host taxonomy
+  04_ARG_concordance.py            - Link ARG contigs to plasmid
+                                     clusters and host MAGs via Hi-C
+  05_figure_reproduction.R         - Reproduce all manuscript figures
+                                     from Source_Data.xlsx
+
+Dependencies
+------------
+  Python >= 3.8
+  pandas, numpy, networkx
+  BLASTn (NCBI BLAST+ suite)
+  AMRFinderPlus
+  geNomad
+  MOB-suite
+
+All Python dependencies can be installed via:
+  pip install pandas numpy networkx
+
+R packages required:
+  igraph, dplyr, readr, optparse
+  (optional for plots: ggplot2, ggnetwork, RColorBrewer)
+
+
+Module 1: 01_plasmid_clustering.R
+----------------------------------
+Clusters plasmid-derived contigs into plasmid clusters using the
+Walktrap community detection algorithm on the Hi-C contact graph.
+
+This step follows the approach described in Risely et al. (Nat.
+Commun. 2024). Input is a filtered Hi-C edge list containing only
+plasmid-plasmid contig pairs (identified by geNomad). The algorithm
+groups contigs that share frequent Hi-C contacts into clusters,
+where each cluster represents a putative plasmid unit (complete or
+partial).
+
+Usage:
+  Rscript 01_plasmid_clustering.R \
+    --final_remove /path/to/{SAMPLE}_final_remove.tsv \
+    --min_weight 15 \
+    --steps 10 \
+    --out_csv /path/to/{SAMPLE}_cluster_membership_filtered.csv \
+    --plot_prefix /path/to/{SAMPLE}_network \
+    --amr /path/to/{SAMPLE}_amrfinder_AMR.tsv
+
+Parameters:
+  --final_remove   TSV from preprocessing step containing Hi-C edges
+                   with columns: col1, col2, type_col1, type_col2, V3.
+                   type_col1/type_col2 indicate contig classification
+                   (plasmid, chromosome, etc.). V3 is the raw Hi-C
+                   contact count.
+  --min_weight     Minimum Hi-C contact count for edge retention
+                   (default: 15). Edges with V3 >= min_weight are kept.
+  --inclusive      If set, uses >= threshold; otherwise uses >
+                   (min_weight - 1), which is equivalent.
+  --steps          Number of random walk steps for Walktrap algorithm
+                   (default: 10).
+  --out_csv        Output CSV path for cluster membership table
+                   (columns: Node, Cluster).
+  --amr            (Optional) AMRFinderPlus output TSV. If provided,
+                   clusters containing AMR contigs are highlighted in
+                   the network plot.
+  --plot_prefix    (Optional) Prefix for PNG network visualizations.
+                   Generates two plots: clustered view and AMR-
+                   highlighted view.
+
+Outputs:
+  {out_csv}                         Cluster membership table (Node,
+                                    Cluster) where Node is the contig
+                                    ID and Cluster is the assigned
+                                    plasmid cluster number.
+  {plot_prefix}_clustered.png       Network plot colored by cluster
+  {plot_prefix}_amr_highlight.png   Network plot with AMR-linked
+                                    clusters highlighted
+
+Algorithm:
+  1. Filter edges to plasmid-plasmid pairs with Hi-C contacts
+     >= min_weight (default 15).
+  2. Construct a weighted undirected graph from filtered edges.
+  3. Apply igraph::cluster_walktrap with specified step length.
+  4. Output membership table mapping each contig to its cluster.
+
+Manuscript parameters used:
+  --min_weight 15 --steps 10
+
+
+Module 2: 02_persistence_identification.py
+-------------------------------------------
+Identifies persistent plasmid clusters across treatment stages by
+comparing plasmid cluster sequences via BLASTn.
+
+Persistent clusters are defined as clusters sharing >=95% nucleotide
+identity across two or more treatment stages within the same facility
+and sampling week.
+
+Usage:
+  python 02_persistence_identification.py \
+    --indir /path/to/cluster_member \
+    --outdir /path/to/persistence_output \
+    --min-pid 95 \
+    --min-aln 500 \
+    --max-evalue 1e-10 \
+    --min-cluster-bp 2000
+
+Parameters:
+  --indir           Directory containing BLASTn results, cluster
+                    membership files, and FASTA sequences for each
+                    sample. Expected files per sample group:
+                      inf_vs_AS_{group}.csv    BLASTn output (outfmt 6)
+                      AS_vs_eff_{group}.csv
+                      inf_vs_eff_{group}.csv
+                      {sample}_cluster_membership_filtered.csv
+                      {sample}_plasmid_contigs.fa (or similar FASTA)
+  --outdir          Output directory
+  --min-pid         Minimum percent identity for BLASTn hits (default: 95)
+  --min-aln         Minimum alignment length in bp (default: 500)
+  --max-evalue      Maximum e-value (default: 1e-10)
+  --min-sym         Minimum symmetric coverage for edge acceptance
+                    (default: 0.2)
+  --min-cluster-bp  Minimum cluster size in bp (default: 0, set to
+                    2000 in manuscript)
+
+Outputs (per group):
+  step1_cluster_similarity_inf_as.tsv    Pairwise cluster comparisons
+  step1_cluster_similarity_as_eff.tsv
+  step1_cluster_similarity_inf_eff.tsv
+  step2_edges_*.filtered.tsv             Filtered edges
+  step2_lineage_nodes.tsv                Node-to-lineage assignments
+  step2_lineage_summary.tsv              Lineage summaries with
+                                         persistence class
+
+Combined outputs:
+  ALL_groups_lineage_counts.tsv          Lineage counts per group
+  ALL_groups_strict_triples.tsv          Inf-AS-Eff triples
+  ALL_groups_inf_eff_pairs.tsv           Direct Inf-Eff pairs
+
+Algorithm:
+  Step 1: For each pair of treatment stages within a facility/week,
+          compute cluster-level sequence similarity using BLASTn hits.
+          Aligned bases are tracked per contig and merged into
+          non-overlapping intervals to compute coverage. Symmetric
+          coverage is the minimum of bidirectional coverage fractions.
+  Step 2: Filter edges by symmetric coverage and minimum hits, then
+          build a graph of cluster nodes (labeled by stage) connected
+          by filtered edges. Connected components define persistent
+          plasmid lineages, classified by which stage transitions
+          they span (Inf-AS, AS-Eff, Inf-Eff, Inf-AS-Eff).
+
+
+Module 3: 03_mobility_host_annotation.py
+-----------------------------------------
+Annotates each persistent plasmid lineage with mobility classification
+(from MOB-suite) and host taxonomy at each treatment stage.
+
+Usage:
+  python 03_mobility_host_annotation.py \
+    --persistence_dir /path/to/persistence_output \
+    --mobility_categories /path/to/mobility_categories.csv \
+    --host_table /path/to/ALL_CITIES_data.csv \
+    --host_strength_col Log_Normalized_HiC_Contacts \
+    --host_level family \
+    --host_mode frac \
+    --outdir /path/to/step3_output
+
+Parameters:
+  --persistence_dir      Output from Module 1 (contains group
+                         subdirectories with lineage tables)
+  --mobility_categories  CSV with columns: Sample, Cluster,
+                         cluster_mobility
+  --host_table           Bin-cluster host association table with
+                         columns: Sample (or City/Week/Site), Cluster,
+                         Bin, Taxonomy, and host strength column
+  --host_strength_col    Column for Hi-C linkage strength
+                         (default: Log_Normalized_HiC_Contacts)
+  --host_level           Taxonomic level: family, genus, or species
+                         (default: family)
+  --host_mode            How to define host set per cluster per stage:
+                         "frac" keeps taxa with fraction >= min_host_frac
+  --min_host_frac        Fraction threshold if host_mode=frac
+                         (default: 0.0)
+
+
+Outputs:
+  lineage_nodes_annotated.tsv             Per-node annotations with
+                                          mobility and host taxa
+  lineage_summary_mobility_hosts.tsv      Per-lineage summary with
+                                          top hosts per stage, host
+                                          continuity flags, and
+                                          mobility classification
+  counts_persistence_by_mobility.tsv      Lineage counts by
+                                          persistence class and
+                                          mobility
+  host_continuity_by_mobility.tsv         Fraction of lineages with
+                                          shared hosts between stages,
+                                          grouped by mobility
+
+Host association logic:
+  For each persistent cluster at each stage, host families are ranked
+  by normalized Hi-C contact weight. With host_mode="frac" and
+  min_host_frac=0.0 (default), all families with Hi-C contacts
+  are retained as associated hosts.
+
+Mobility classification:
+  Each cluster is classified as conjugative (MPF present),
+  mobilizable/conjugative (relaxase/MOB or oriT without MPF), or
+  no marker detected. For lineage-level summaries, the highest
+  mobility rank among constituent nodes is reported.
+
+
+Module 4: 04_ARG_concordance.py
+--------------------------------
+Links antibiotic resistance gene (ARG) contigs to plasmid clusters
+and host MAGs via normalized Hi-C contacts, then evaluates concordance
+across all three pairwise links.
+
+Usage (per sample):
+  python 04_ARG_concordance.py --sample SAMPLE_ID --basedir /path/to/data
+
+  Run once per sample. Paths are configured at the top of the script
+  (edit sample_dir and file paths as needed).
+
+Required input files (per sample):
+  {SAMPLE}_cleaned.txt                     Hi-C edge list
+  {SAMPLE}_contig_reads.csv                Contig lengths and mapped reads
+  contig_bin_mapping_{SAMPLE}.txt          Contig-to-MAG bin mapping
+  {SAMPLE}_cluster_membership_filtered.csv Contig-to-cluster membership
+  {SAMPLE}_normalized_filtered.csv         Normalized Hi-C contacts
+                                           (Bin x Cluster)
+  {SAMPLE}_amrfinder_AMR.tsv               AMRFinderPlus output
+  {SAMPLE}_final.contigs_plasmid_summary.tsv  geNomad plasmid summary
+
+Parameters (set within script):
+  POLICY = "plasmid_only"   Only ARG contigs classified as
+                            plasmid-derived by geNomad are eligible
+                            for plasmid-cluster attachment
+  BIN_FRAC_THRESH = 0.0     Keep all ARG-to-Bin candidate links
+
+Concordance evaluation:
+  For each (ARG contig, plasmid cluster, host MAG) triple, three
+  pairwise Hi-C links are assessed:
+    1. ARG contig - plasmid cluster
+    2. ARG contig - host MAG
+    3. Host MAG - plasmid cluster
+
+  The Bin-Cluster link is evaluated using the normalized Hi-C contact
+  table. A link is considered detected if the cluster ranks among the
+  top 3 for that bin (bin_cluster_rank <= 3) or has a relative linkage
+  strength >= 0.2.
+
+  The internal classification uses four levels:
+    supported      All three links detected (rank <= 3 or
+                   rel_strength >= 0.2 for Bin-Cluster)
+    weak_support   Bin-Cluster link exists but below thresholds
+    no_support     No Bin-Cluster link detected
+    missing        Bin or Cluster data unavailable
+
+  For manuscript reporting, these are collapsed to binary:
+    concordant     = supported or weak_support
+    non-concordant = no_support or missing
+
+Outputs:
+  {SAMPLE}_ARG_to_Bin_raw.csv              ARG-to-Bin raw Hi-C links
+  {SAMPLE}_ARG_to_Bin_norm_contig.csv      Contig-length normalized
+  {SAMPLE}_ARG_to_Bin_norm_contig_bin.csv  Contig + MAG abundance
+                                           normalized
+  {SAMPLE}_ARG_to_Cluster_all.csv          ARG-to-Cluster links
+  {SAMPLE}_ARG_triangulation_long_*.csv    Full evidence table
+  {SAMPLE}_ARG_triangulation_allclusters_*.csv  Collapsed per
+                                           (ARG, Cluster) with
+                                           concordance class
+  {SAMPLE}_ARG_triangulation_ARGlevel_summary_*.csv  Per-ARG summary
+
+Normalization:
+  Hi-C contacts are normalized by contig length and mapped read depth
+  for both ends of each contact. ARG-to-MAG linkages are additionally
+  normalized by MAG abundance (Total_Mapped_Reads_MAG) to account for
+  variation in genome representation across samples.
+
+
+Module 5: 05_figure_reproduction.R
+------------------------------------
+Reproduces all manuscript figures (main and supplementary) from
+Source_Data.xlsx. Each figure panel is read from a named sheet
+(e.g., "Fig.1a", "Fig.2b", "Fig.S3a") and output as PDF.
+
+Usage:
+  Rscript 05_figure_reproduction.R
+
+Requires Source_Data.xlsx in the working directory. Outputs are
+saved to ./output/.
+
+Additional R packages required:
+  readxl, ggpubr, cowplot, stringr, scales, ggnewscale, ggtext
+
+
+Workflow
+--------
+The complete workflow for the manuscript analysis:
+
+  1. Assemble shotgun reads with MEGAHIT
+  2. Bin contigs into MAGs using ProxiMeta (Hi-C deconvolution)
+  3. Classify MAG taxonomy with GTDB-Tk
+  4. Identify plasmid-derived contigs with geNomad
+  5. Filter Hi-C edges (remove IS/transposase contigs).
+     Preprocessing steps 1-5 follow the pipeline described in
+     Risely et al. (Nat. Commun. 2024); scripts and detailed
+     methods are available at https://osf.io/ezb8j/
+  6. Run Module 1: 01_plasmid_clustering.R (cluster plasmid
+     contigs into plasmid clusters)
+  7. Annotate mobility with MOB-suite
+  8. Identify ARGs with AMRFinderPlus
+  9. Run Module 2: 02_persistence_identification.py (identify
+     persistent plasmid clusters across treatment stages)
+  10. Run Module 3: 03_mobility_host_annotation.py (annotate
+      persistent clusters with mobility and host taxonomy)
+  11. Run Module 4: 04_ARG_concordance.py (link ARG contigs to
+      plasmid clusters and host MAGs, per sample)
+  12. Statistical analyses and figures in R (see R/ directory)
+
+
+
+
+Citation
+--------
+Zhou, S., Philo, S.E., Saldana, M.A., Delgado Vela, J., Smith, A.L.,
+Stadler, L.B. Mapping plasmid-host networks and tracking persistent
+plasmids in wastewater microbiomes. Nature Communications (submitted).
