@@ -154,7 +154,7 @@ Usage:
     --min-pid 95 \
     --min-aln 500 \
     --max-evalue 1e-10 \
-    --min-sym 0.2 \
+    --min-sym 0.5 \
     --min-cluster-bp 2000
 
 Parameters:
@@ -171,7 +171,6 @@ Parameters:
   --min-aln         Minimum alignment length in bp (default: 500)
   --max-evalue      Maximum e-value (default: 1e-10)
   --min-sym         Minimum symmetric coverage for edge acceptance
-                    (default: 0.2)
   --min-cluster-bp  Minimum cluster size in bp (default: 0, set to
                     2000 in manuscript)
 
