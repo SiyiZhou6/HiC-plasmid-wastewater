@@ -372,5 +372,4 @@ The complete workflow for the manuscript analysis:
 Citation
 --------
 Zhou, S., Philo, S.E., Saldana, M.A., Delgado Vela, J., Smith, A.L.,
-Stadler, L.B. Mapping plasmid-host networks and tracking persistent
-plasmids in wastewater microbiomes. Nature Communications (submitted).
+Stadler, L.B. Plasmid–Host Networks Reveal Persistent Mobile Elements Across Wastewater Treatment. Nature Communications (submitted).
