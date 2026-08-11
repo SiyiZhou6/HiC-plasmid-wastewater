@@ -1,9 +1,9 @@
-Plasmid Persistence and ARG Assignment Pipeline
+Plasmid–Host Networks Reveal Persistent Mobile Elements Across Wastewater Treatment
+(Plasmid Persistence and ARG Assignment Pipeline)
 ================================================
 
 Custom analysis scripts for:
-Zhou et al., "Mapping plasmid-host networks and tracking persistent
-plasmids in wastewater microbiomes"
+Zhou et al., "Plasmid–Host Networks Reveal Persistent Mobile Elements Across Wastewater Treatment"
 
 Overview
 --------
